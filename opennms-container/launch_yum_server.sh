@@ -13,7 +13,9 @@ PORT="$1"; shift || :
 OCI="opennms/yum-repo:1.0.0-b4609"
 
 [ -n "${YUM_CONTAINER_NAME}" ] || YUM_CONTAINER_NAME="yum-repo"
-[ -n "${BUILD_NETWORK}"  ] || BUILD_NETWORK="opennms-build-network"
+[ -n "${BUILD_NETWORK}"      ] || BUILD_NETWORK="opennms-build-network"
+
+YUM_VOLUME="${YUM_CONTAINER_NAME}-volume"
 
 err_report() {
   echo "error on line $1" >&2
@@ -44,11 +46,23 @@ cd "$MYDIR"
 echo "=== creating ${BUILD_NETWORK} network, if necessary ==="
 ./create_network.sh "${BUILD_NETWORK}"
 
+echo "=== creating ${YUM_VOLUME} volume ==="
+docker volume rm --force "${YUM_VOLUME}" || :
+docker volume create --name "${YUM_VOLUME}"
+
+echo "=== copying RPMs from ${RPMDIR} to temporary volume ==="
+docker create -v "${YUM_VOLUME}:/repo" --name "${YUM_CONTAINER_NAME}-helper" busybox
+for FILE in "${RPMDIR}"/*.rpm; do
+  echo "* ${FILE}"
+  docker cp "${FILE}" "${YUM_CONTAINER_NAME}-helper:/repo/"
+done
+docker rm --force "${YUM_CONTAINER_NAME}-helper"
+
 echo "=== stopping old yum servers, if necessary ==="
 ./stop_yum_server.sh >/dev/null 2>&1 || :
 
 echo "=== launching yum server ==="
-docker run --rm --detach --name "${YUM_CONTAINER_NAME}" --volume "${RPMDIR}:/repo" --network "${BUILD_NETWORK}" --publish "${PORT}:${PORT}" "${OCI}"
+docker run --rm --detach --name "${YUM_CONTAINER_NAME}" --volume "${YUM_VOLUME}:/repo" --network "${BUILD_NETWORK}" --publish "${PORT}:${PORT}" "${OCI}"
 
 echo "=== waiting for server to be available ==="
 COUNT=0
